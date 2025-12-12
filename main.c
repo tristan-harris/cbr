@@ -126,11 +126,12 @@ void rename_file(const char *old_filename, const char *new_filename) {
 }
 
 void remove_file(const char *filename) {
-    if (!file_exists(filename)) {
-        printf("Error: File '%s' does not exist.\n", filename);
+    int result = remove(filename);
+    if (result != 0) {
+        perror("remove");
+        printf("Attempted to remove '%s'\n", filename);
         exit(EXIT_FAILURE);
     }
-    remove(filename);
 }
 
 void print_rename_message(const char *old_filename, const char *new_filename) {
