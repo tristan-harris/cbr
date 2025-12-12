@@ -157,13 +157,13 @@ bool binary_exists(const char *name) {
     return false;
 }
 
-void generate_unique_filepath(char buffer[], int buf_len, char *prefix) {
+void unique_filepath_generate(char buffer[], int buf_len, const char *prefix) {
     do {
         snprintf(buffer, buf_len, "%s_%d", prefix, rand() % 1000);
     } while (file_exists(buffer));
 }
 
-char *get_editor_from_env(void) {
+char *editor_from_env(void) {
     char *editor_path;
 
     editor_path = getenv("VISUAL");
@@ -178,20 +178,20 @@ char *get_editor_from_env(void) {
     return NULL;
 }
 
-int str_cmp(const void *a, const void *b) {
-    const char *sa = *(const char **)a;
-    const char *sb = *(const char **)b;
-    return strcmp(sa, sb);
+int string_compare(const void *s1_ptr, const void *s2_ptr) {
+    const char *s1 = *(const char **)s1_ptr;
+    const char *s2 = *(const char **)s2_ptr;
+    return strcmp(s1, s2);
 }
 
 // filename list must be sorted
-bool filename_list_has(FilenameList *fl, char *filename) {
-    char **match =
-        bsearch(&filename, fl->data, fl->count, sizeof(char **), str_cmp);
+bool filename_list_has(FilenameList *fl, const char *filename) {
+    char **match = bsearch(&filename, fl->data, fl->count, sizeof(char **),
+                           string_compare);
     return match != NULL;
 }
 
-bool rename_file(const char *old_filename, const char *new_filename) {
+bool file_rename(const char *old_filename, const char *new_filename) {
     int result = rename(old_filename, new_filename);
     if (result != 0) {
         perror("rename");
@@ -239,16 +239,16 @@ bool gio_trash(char *argv[]) {
     return false;
 }
 
-void print_rename_message(const char *old_filename, const char *new_filename) {
+void rename_message_print(const char *old_filename, const char *new_filename) {
     printf(BOLD GREEN "Renamed " RESET "'%s'\n", old_filename);
     printf(GREEN "     ->" RESET " '%s'\n", new_filename);
 }
 
-void print_delete_message(const char *filename) {
+void delete_message_print(const char *filename) {
     printf(BOLD RED "Removed " RESET "'%s'\n", filename);
 }
 
-void print_trash_message(const char *filename) {
+void trash_message_print(const char *filename) {
     printf(BOLD YELLOW "Trashed " RESET "'%s'\n", filename);
 }
 
@@ -342,11 +342,11 @@ int main(int argc, char *argv[]) {
 
     // sort file names
     qsort(initial_names_list.data, initial_names_list.count, sizeof(char **),
-          str_cmp);
+          string_compare);
 
     // temp file creation
     char tmp_file_path[32];
-    generate_unique_filepath(tmp_file_path, sizeof(tmp_file_path),
+    unique_filepath_generate(tmp_file_path, sizeof(tmp_file_path),
                              "/tmp/cbr_edit_file");
 
     // open temp file
@@ -366,7 +366,7 @@ int main(int argc, char *argv[]) {
 
     // edit file list
     char *editor = arguments.editor;
-    if (!editor) { editor = get_editor_from_env(); }
+    if (!editor) { editor = editor_from_env(); }
     if (!editor) {
         fprintf(stderr, "Error: Could not find any editor from environment.\n");
         goto fail;
@@ -411,7 +411,7 @@ int main(int argc, char *argv[]) {
     new_sorted_names_list.count = new_names_list.count;
 
     qsort(new_sorted_names_list.data, new_sorted_names_list.count,
-          sizeof(char **), str_cmp);
+          sizeof(char **), string_compare);
 
     // further validation
     for (int i = 0; i < initial_names_list.count; i++) {
@@ -465,7 +465,7 @@ int main(int argc, char *argv[]) {
                     goto fail;
                 }
                 if (!arguments.silent) {
-                    print_delete_message(initial_filename);
+                    delete_message_print(initial_filename);
                 }
                 continue;
             }
@@ -474,11 +474,11 @@ int main(int argc, char *argv[]) {
         // if instance of cyclic renaming
         if (filename_list_has(&initial_names_list, new_filename)) {
             char temp_filename[256];
-            generate_unique_filepath(temp_filename, sizeof(temp_filename),
+            unique_filepath_generate(temp_filename, sizeof(temp_filename),
                                      "cbr_transition_file");
 
             // will rename later from temp name to avoid conflict
-            bool success = rename_file(initial_filename, temp_filename);
+            bool success = file_rename(initial_filename, temp_filename);
             if (!success) { goto fail; }
 
             RenamePath *rp = malloc(sizeof *rp);
@@ -489,10 +489,10 @@ int main(int argc, char *argv[]) {
         }
         // else standard rename
         else {
-            bool success = rename_file(initial_filename, new_filename);
+            bool success = file_rename(initial_filename, new_filename);
             if (!success) { goto fail; }
             if (!arguments.silent) {
-                print_rename_message(initial_filename, new_filename);
+                rename_message_print(initial_filename, new_filename);
             }
         }
     }
@@ -514,7 +514,7 @@ int main(int argc, char *argv[]) {
                 args_idx = 2;
 
                 for (int j = 2; gio_args[j]; j++) {
-                    print_trash_message(gio_args[j]);
+                    trash_message_print(gio_args[j]);
                 }
             }
         }
@@ -526,7 +526,7 @@ int main(int argc, char *argv[]) {
             if (!success) { goto fail; }
 
             for (int j = 2; gio_args[j]; j++) {
-                print_trash_message(gio_args[j]);
+                trash_message_print(gio_args[j]);
             }
         }
     }
@@ -534,10 +534,10 @@ int main(int argc, char *argv[]) {
     // rename temp files to new filenames
     for (int i = 0; i < rename_path_list.count; i++) {
         RenamePath *rp = rename_path_list.data[i];
-        bool success = rename_file(rp->temp_name, rp->new_name);
+        bool success = file_rename(rp->temp_name, rp->new_name);
         if (!success) { goto fail; }
         if (!arguments.silent) {
-            print_rename_message(rp->initial_name, rp->new_name);
+            rename_message_print(rp->initial_name, rp->new_name);
         }
     }
 
