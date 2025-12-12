@@ -125,6 +125,13 @@ bool file_exists(const char *filename) {
     return lstat(filename, &st) == 0; // lstat() does not follow symlink
 }
 
+bool file_is_reg_or_sym(const char *filename) {
+    struct stat st;
+    int result = lstat(filename, &st);
+    if (result != 0) { return false; }
+    return S_ISREG(st.st_mode) || S_ISLNK(st.st_mode);
+}
+
 // whether binary exists in directory in $PATH
 bool binary_exists(const char *name) {
     const char *path = getenv("PATH");
@@ -138,7 +145,7 @@ bool binary_exists(const char *name) {
         char absolute_path[512];
         snprintf(absolute_path, sizeof(absolute_path), "%s/%s", dir, name);
 
-        if (file_exists(absolute_path)) {
+        if (access(absolute_path, X_OK) == 0) {
             free(paths);
             return true;
         }
@@ -317,10 +324,18 @@ int main(int argc, char *argv[]) {
     if (initial_names_list.count == 0) { exit(EXIT_SUCCESS); }
 
     // check that input files exist
+    // and that they are regular or symbolic link files
     for (int i = 0; i < initial_names_list.count; i++) {
-        if (!file_exists(initial_names_list.data[i])) {
-            fprintf(stderr, "Error: File '%s' does not exist.\n",
-                    initial_names_list.data[i]);
+        char *filename = initial_names_list.data[i];
+
+        if (!file_exists(filename)) {
+            fprintf(stderr, "Error: File '%s' does not exist.\n", filename);
+            goto fail;
+        } else if (!file_is_reg_or_sym(filename)) {
+            fprintf(
+                stderr,
+                "Error: File '%s' is not a regular file or symbolic link.\n",
+                filename);
             goto fail;
         }
     }
