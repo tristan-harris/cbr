@@ -251,6 +251,15 @@ int main(int argc, char *argv[]) {
     // check that there is at least one input filename
     if (initial_names_list.count == 0) { exit(EXIT_SUCCESS); }
 
+    // check that input files exist
+    for (int i = 0; i < initial_names_list.count; i++) {
+        if (!file_exists(initial_names_list.data[i])) {
+            fprintf(stderr, "Error: File '%s' does not exist.\n",
+                    initial_names_list.data[i]);
+            goto fail;
+        }
+    }
+
     // sort file names
     qsort(initial_names_list.data, initial_names_list.count, sizeof(char **),
           str_cmp);
