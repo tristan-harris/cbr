@@ -27,6 +27,13 @@
         }                                                                      \
         a->data[a->count] = item;                                              \
         a->count++;                                                            \
+    }                                                                          \
+                                                                               \
+    static inline void Name##_free(Name *a) {                                  \
+        for (int i = 0; i < a->count; i++) {                                   \
+            free(a->data[i]);                                                  \
+        }                                                                      \
+        free(a->data);                                                         \
     }
 
 #define BOLD "\x1b[1m"
@@ -39,7 +46,7 @@
 
 // ===== DATA STRUCTURES =======================================================
 
-// used for multi-step file renaming (cyclic renaming)
+// used for multi-step file renaming
 typedef struct {
     char *initial_name;
     char *temp_name;
@@ -47,7 +54,7 @@ typedef struct {
 } RenamePath;
 
 DEFINE_ARRAY_TYPE(FilenameList, char *);
-DEFINE_ARRAY_TYPE(RenamePathList, RenamePath);
+DEFINE_ARRAY_TYPE(RenamePathList, RenamePath *);
 
 // ===== UTIL ==================================================================
 
@@ -296,11 +303,11 @@ int main(void) {
             // rename later from temp name to avoid conflict
             rename_file(initial_filename, temp_filename);
 
-            RenamePath rp = {.initial_name = initial_filename,
-                             .temp_name = strdup(temp_filename),
-                             .new_name = new_filename};
+            RenamePath *rp = malloc(sizeof *rp);
+            *rp = (RenamePath){.initial_name = initial_filename,
+                               .temp_name = strdup(temp_filename),
+                               .new_name = new_filename};
             RenamePathList_add(&rename_path_list, rp);
-
         } else {
             rename_file(initial_filename, new_filename);
             print_rename_message(initial_filename, new_filename);
@@ -308,21 +315,15 @@ int main(void) {
     }
 
     for (int i = 0; i < rename_path_list.count; i++) {
-        RenamePath *rp = &rename_path_list.data[i];
+        RenamePath *rp = rename_path_list.data[i];
         rename_file(rp->temp_name, rp->new_name);
         print_rename_message(rp->initial_name, rp->new_name);
     }
 
-    // free memory from filename lists
-    for (int i = 0; i < initial_names_list.count; i++) {
-        free(initial_names_list.data[i]);
-    }
-    free(initial_names_list.data);
-
-    for (int i = 0; i < new_names_list.count; i++) {
-        free(new_names_list.data[i]);
-    }
-    free(new_names_list.data);
+    // free memory from dynamic arrays
+    FilenameList_free(&initial_names_list);
+    FilenameList_free(&new_names_list);
+    RenamePathList_free(&rename_path_list);
 
     free(new_sorted_names_list.data);
 
