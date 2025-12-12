@@ -6,56 +6,48 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define TARGET_DIR "."
-#define TEMP_FILE_TEMPLATE "cbr_file_XXXXXX"
+// used to define type-safe dynamic arrays
+#define DEFINE_ARRAY_TYPE(Name, Type)                                          \
+    typedef struct {                                                           \
+        Type *data;                                                            \
+        int capacity;                                                          \
+        int count;                                                             \
+    } Name;                                                                    \
+                                                                               \
+    static inline void Name##_init(Name *a) {                                  \
+        a->data = NULL;                                                        \
+        a->capacity = 0;                                                       \
+        a->count = 0;                                                          \
+    }                                                                          \
+                                                                               \
+    static inline void Name##_add(Name *a, Type item) {                        \
+        if (a->count >= a->capacity) {                                         \
+            a->capacity = a->capacity ? a->capacity * 2 : 1;                   \
+            a->data = realloc(a->data, a->capacity * sizeof(Type));            \
+        }                                                                      \
+        a->data[a->count] = item;                                              \
+        a->count++;                                                            \
+    }
 
 #define BOLD "\x1b[1m"
 #define RED "\x1b[31m"
 #define GREEN "\x1b[32m"
 #define RESET "\x1b[0m"
 
-// ===== PROTOTYPES ============================================================
-
-int str_cmp(const void *a, const void *b);
+#define TARGET_DIR "."
+#define TEMP_FILE_TEMPLATE "cbr_file_XXXXXX"
 
 // ===== DATA STRUCTURES =======================================================
 
+// used for multi-step file renaming (cyclic renaming)
 typedef struct {
-    char **files;
-    int capacity;
-    int count;
-} FileList;
+    char *initial_name;
+    char *temp_name;
+    char *new_name;
+} RenamePath;
 
-#define FL_INIT {.files = NULL, .capacity = 0, .count = 0}
-
-void file_list_add(FileList *fl, char *file_name) {
-    if (!fl->files) {
-        fl->files = malloc(sizeof(char **));
-        fl->files[0] = strdup(file_name);
-        fl->capacity = 1;
-        fl->count = 1;
-    } else {
-        if (fl->count >= fl->capacity) {
-            fl->capacity *= 2;
-            fl->files = realloc(fl->files, fl->capacity * sizeof(char **));
-        }
-        fl->files[fl->count] = strdup(file_name);
-        fl->count++;
-    }
-}
-
-bool file_list_has_entry(FileList *fl, char *file_name) {
-    char **match =
-        bsearch(&file_name, fl->files, fl->count, sizeof(char **), str_cmp);
-    return match != NULL;
-}
-
-void file_list_delete(FileList *fl) {
-    for (int i = 0; i < fl->count; i++) {
-        free(fl->files[i]);
-    }
-    if (fl->files) { free(fl->files); }
-}
+DEFINE_ARRAY_TYPE(FilenameList, char *);
+DEFINE_ARRAY_TYPE(RenamePathList, RenamePath);
 
 // ===== UTIL ==================================================================
 
@@ -116,15 +108,21 @@ int str_cmp(const void *a, const void *b) {
     return strcmp(sa, sb);
 }
 
+// filename list must be sorted
+bool filename_list_has(FilenameList *fl, char *filename) {
+    char **match =
+        bsearch(&filename, fl->data, fl->count, sizeof(char **), str_cmp);
+    return match != NULL;
+}
+
 void rename_file(const char *old_filename, const char *new_filename) {
     int result = rename(old_filename, new_filename);
     if (result != 0) {
         perror("rename");
+        printf("Attempted to rename '%s' to '%s'\n", old_filename,
+               new_filename);
         exit(EXIT_FAILURE);
     }
-
-    printf(BOLD GREEN "Renamed " RESET "'%s'\n", old_filename);
-    printf(GREEN "     ->" RESET " '%s'\n", new_filename);
 }
 
 void remove_file(const char *filename) {
@@ -133,18 +131,27 @@ void remove_file(const char *filename) {
         exit(EXIT_FAILURE);
     }
     remove(filename);
+}
+
+void print_rename_message(const char *old_filename, const char *new_filename) {
+    printf(BOLD GREEN "Renamed " RESET "'%s'\n", old_filename);
+    printf(GREEN "     ->" RESET " '%s'\n", new_filename);
+}
+
+void print_delete_message(const char *filename) {
     printf(BOLD RED "Removed " RESET "'%s'\n", filename);
 }
 
 // ===== MAIN ==================================================================
 
 int main(void) {
-    FileList initial_file_list = FL_INIT;
-    FileList new_file_list = FL_INIT;
-    FileList new_sorted_file_list = FL_INIT;
+    FilenameList initial_names_list, new_names_list, new_sorted_names_list;
+    FilenameList_init(&initial_names_list);
+    FilenameList_init(&new_names_list);
 
-    FileList temp_file_list = FL_INIT;
-    FileList temp_new_file_list = FL_INIT;
+    // used to handle temporary files
+    RenamePathList rename_path_list;
+    RenamePathList_init(&rename_path_list);
 
     // read dir
     DIR *dir = opendir(TARGET_DIR);
@@ -163,15 +170,15 @@ int main(void) {
                        entry->d_name);
                 return EXIT_FAILURE;
             }
-            file_list_add(&initial_file_list, entry->d_name);
+            FilenameList_add(&initial_names_list, strdup(entry->d_name));
         }
     }
 
     // check that there is at least one input filename
-    if (initial_file_list.count == 0) { return EXIT_SUCCESS; }
+    if (initial_names_list.count == 0) { return EXIT_SUCCESS; }
 
     // sort file names
-    qsort(initial_file_list.files, initial_file_list.count, sizeof(char **),
+    qsort(initial_names_list.data, initial_names_list.count, sizeof(char **),
           str_cmp);
 
     // temp file creation
@@ -191,8 +198,8 @@ int main(void) {
     }
 
     // write to temp file
-    for (int i = 0; i < initial_file_list.count; i++) {
-        fprintf(tmp_file_ptr, "%s\n", initial_file_list.files[i]);
+    for (int i = 0; i < initial_names_list.count; i++) {
+        fprintf(tmp_file_ptr, "%s\n", initial_names_list.data[i]);
     }
 
     closedir(dir);
@@ -219,92 +226,104 @@ int main(void) {
     char buffer[256];
     while (fgets(buffer, sizeof(buffer), tmp_file_ptr)) {
         buffer[strcspn(buffer, "\n")] = '\0'; // strip newline
-        file_list_add(&new_file_list, buffer);
+        FilenameList_add(&new_names_list, strdup(buffer));
     }
 
     // check that there are same number of lines
-    if (initial_file_list.count != new_file_list.count) {
+    if (initial_names_list.count != new_names_list.count) {
         printf("Error: Mismatched number of lines. New filename list contains "
                "%d entries while original list contains %d.\n",
-               new_file_list.count, initial_file_list.count);
+               new_names_list.count, initial_names_list.count);
         return EXIT_FAILURE;
     }
 
     // shallow copy new file list for sorting
-    new_sorted_file_list.files = malloc(new_file_list.count * sizeof(char **));
-    memcpy(new_sorted_file_list.files, new_file_list.files,
-           new_file_list.count * sizeof(char **));
-    new_sorted_file_list.count = new_file_list.count;
+    new_sorted_names_list.data = malloc(new_names_list.count * sizeof(char **));
+    memcpy(new_sorted_names_list.data, new_names_list.data,
+           new_names_list.count * sizeof(char **));
+    new_sorted_names_list.count = new_names_list.count;
 
-    qsort(new_sorted_file_list.files, new_sorted_file_list.count,
+    qsort(new_sorted_names_list.data, new_sorted_names_list.count,
           sizeof(char **), str_cmp);
 
     // further validation
-    for (int i = 0; i < initial_file_list.count; i++) {
-        char *new_file_name = new_file_list.files[i];
+    for (int i = 0; i < initial_names_list.count; i++) {
+        char *new_filename = new_names_list.data[i];
 
         // skip files to be deleted
-        if (new_file_name[0] == '#') { continue; }
+        if (new_filename[0] == '#') { continue; }
 
-        // check that output filenames do not match 'outside' file
-        if (!file_list_has_entry(&initial_file_list, new_file_name)) {
-            if (file_exists(new_file_name)) {
-                printf("Error: File '%s' already exists.\n", new_file_name);
+        // if renaming to filename not in input list and file already exists
+        if (!filename_list_has(&initial_names_list, new_filename)) {
+            if (file_exists(new_filename)) {
+                printf("Error: File '%s' already exists.\n", new_filename);
                 return EXIT_FAILURE;
             }
         }
 
         // check that output filenames are unique
-        if (i == initial_file_list.count - 1) { continue; }
+        if (i == initial_names_list.count - 1) { continue; }
 
-        if (strcmp(new_sorted_file_list.files[i],
-                   new_sorted_file_list.files[i + 1]) == 0) {
+        if (strcmp(new_sorted_names_list.data[i],
+                   new_sorted_names_list.data[i + 1]) == 0) {
             printf("Error: Output filenames are not unique ('%s').\n",
-                   new_sorted_file_list.files[i]);
+                   new_sorted_names_list.data[i]);
             return EXIT_FAILURE;
         }
     }
 
     // rename/delete files
-    for (int i = 0; i < initial_file_list.count; i++) {
-        char *initial_file_name = initial_file_list.files[i];
-        char *new_file_name = new_file_list.files[i];
+    for (int i = 0; i < initial_names_list.count; i++) {
+        char *initial_filename = initial_names_list.data[i];
+        char *new_filename = new_names_list.data[i];
 
         // skip if unchanged
-        if (strcmp(initial_file_name, new_file_name) == 0) { continue; }
+        if (strcmp(initial_filename, new_filename) == 0) { continue; }
 
         // delete
-        if (new_file_name[0] == '#') {
-            remove_file(initial_file_name);
+        if (new_filename[0] == '#') {
+            remove_file(initial_filename);
+            print_delete_message(initial_filename);
             continue;
         }
 
         // if instance of cyclic renaming
-        if (file_list_has_entry(&initial_file_list, new_file_name)) {
+        if (filename_list_has(&initial_names_list, new_filename)) {
             char temp_filename[256];
             generate_unique_filename(temp_filename, sizeof(temp_filename));
 
             // rename later from temp name to avoid conflict
-            rename_file(initial_file_name, temp_filename);
-            file_list_add(&temp_file_list, temp_filename);
-            file_list_add(&temp_new_file_list, new_file_name);
+            rename_file(initial_filename, temp_filename);
+
+            RenamePath rp = {.initial_name = initial_filename,
+                             .temp_name = strdup(temp_filename),
+                             .new_name = new_filename};
+            RenamePathList_add(&rename_path_list, rp);
+
         } else {
-            rename_file(initial_file_name, new_file_name);
+            rename_file(initial_filename, new_filename);
+            print_rename_message(initial_filename, new_filename);
         }
     }
 
-    for (int i = 0; i < temp_file_list.count; i++) {
-        char *initial_file_name = temp_file_list.files[i];
-        char *new_file_name = temp_new_file_list.files[i];
-
-        rename_file(initial_file_name, new_file_name);
+    for (int i = 0; i < rename_path_list.count; i++) {
+        RenamePath *rp = &rename_path_list.data[i];
+        rename_file(rp->temp_name, rp->new_name);
+        print_rename_message(rp->initial_name, rp->new_name);
     }
 
-    // file_list_delete(&initial_file_list);
-    // file_list_delete(&new_file_list);
-    // file_list_delete(&new_sorted_file_list);
-    // file_list_delete(&temp_file_list);
-    // file_list_delete(&temp_new_file_list);
+    // free memory from filename lists
+    for (int i = 0; i < initial_names_list.count; i++) {
+        free(initial_names_list.data[i]);
+    }
+    free(initial_names_list.data);
+
+    for (int i = 0; i < new_names_list.count; i++) {
+        free(new_names_list.data[i]);
+    }
+    free(new_names_list.data);
+
+    free(new_sorted_names_list.data);
 
     fclose(tmp_file_ptr);
     remove(tmp_file_path);
