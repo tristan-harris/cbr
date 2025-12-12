@@ -4,7 +4,7 @@
 
 ### Overview
 
-cbr is a lightweight bulk file renaming utility. It is only available for Linux systems.
+`cbr` is a lightweight bulk file renaming utility. It is only available for Linux systems.
 
 ---
 
