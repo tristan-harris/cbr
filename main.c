@@ -75,7 +75,21 @@ typedef struct {
 
 const char *argp_program_version = "v" CBR_VERSION;
 
-static char doc[] = "cbr -- Bulk renaming utility";
+static char doc[] =
+    "cbr - C Bulk Renaming (Utility)\n\nThis utility lets you batch-rename "
+    "files using a text editor. Files to be renamed should be supplied as a "
+    "list of command-line arguments, e.g.\n\n  $ cbr *.mp3\n\nThe list of "
+    "files will be opened in the editor specified by the $VISUAL environment "
+    "variable, one filename per line. Edit the list, save and exit. The files "
+    "will be renamed to the edited filenames. Directories and special files "
+    "(e.g. sockets) cannot be renamed.\n\nIf the input file list is empty, "
+    "cbr defaults to listing the contents of the current working "
+    "directory.\n\ncbr supports cycle-renaming, as in you can safely rename A "
+    "to B, B to C and C to A in a single operation.\n\nYou can delete a file "
+    "by prefixing its name with the delete character (by default '#'). Deleted "
+    "files will be fully removed unless -t/--trash is specified, in "
+    "which case they will be moved to the system's recycle bin. Trash "
+    "functionality requires the gio program from GLib.";
 
 static char args_doc[] = "[FILE]...";
 
