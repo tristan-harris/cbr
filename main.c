@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #define CBR_VERSION "0.1"
 
@@ -41,6 +43,7 @@
 #define BOLD "\x1b[1m"
 #define RED "\x1b[31m"
 #define GREEN "\x1b[32m"
+#define YELLOW "\x1b[33m"
 #define RESET "\x1b[0m"
 
 #define TARGET_DIR "."
@@ -60,6 +63,7 @@ DEFINE_ARRAY_TYPE(RenamePathList, RenamePath *)
 typedef struct {
     bool force;          // whether to overwrite existing files
     bool silent;         // whether to write to stdout
+    bool trash;          // whether to marked files to trash
     char delete_char;    // character used to mark file for deletion
     char *editor;        // specify editor to use
     FilenameList *files; // the files to be renamed (args)
@@ -79,6 +83,7 @@ static struct argp_option options[] = {
     {"editor", 'e', "PROGRAM", 0, "Specify what editor to use", 0},
     {"force", 'f', 0, 0, "Allow overwriting of existing files", 0},
     {"silent", 's', 0, 0, "Only report errors", 0},
+    {"trash", 't', 0, 0, "Send files to trash instead of deleting them.", 0},
     {0}};
 
 static error_t parse_opt(int key, char *arg, struct argp_state *state) {
@@ -96,6 +101,9 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
         break;
     case 's':
         arguments->silent = true;
+        break;
+    case 't':
+        arguments->trash = true;
         break;
     case ARGP_KEY_ARG:
         FilenameList_add(arguments->files, strdup(arg));
@@ -185,6 +193,43 @@ bool rename_file(const char *old_filename, const char *new_filename) {
     return true;
 }
 
+// https://www.csl.mtu.edu/cs4411.ck/www/NOTES/process/fork/create.html
+// returns whether successful
+bool gio_trash(char *argv[]) {
+    pid_t pid = fork();
+
+    // if fork() unsuccesful
+    if (pid < 0) {
+        perror("fork");
+        return false;
+    }
+
+    // code for child process
+    if (pid == 0) {
+        execvp("gio", argv);
+
+        // if execvp returns, it's an error
+        perror("execvp");
+
+        // POSIX convention for failed exec() in child-process
+        // 127 means "exec failed for this command"
+        // _exit() bypasses standard exit() procedure (skips atexit() handlers)
+        _exit(127);
+    }
+
+    // in parent process, wait for child
+    int status;
+    if (waitpid(pid, &status, 0) < 0) {
+        perror("waitpid");
+        return false;
+    }
+
+    // if child process terminated normalled and return code is 0
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) { return true; }
+
+    return false;
+}
+
 void print_rename_message(const char *old_filename, const char *new_filename) {
     printf(BOLD GREEN "Renamed " RESET "'%s'\n", old_filename);
     printf(GREEN "     ->" RESET " '%s'\n", new_filename);
@@ -192,6 +237,10 @@ void print_rename_message(const char *old_filename, const char *new_filename) {
 
 void print_delete_message(const char *filename) {
     printf(BOLD RED "Removed " RESET "'%s'\n", filename);
+}
+
+void print_trash_message(const char *filename) {
+    printf(BOLD YELLOW "Trashed " RESET "'%s'\n", filename);
 }
 
 // ===== MAIN ==================================================================
@@ -202,6 +251,10 @@ int main(int argc, char *argv[]) {
     FilenameList_init(&new_names_list);
     FilenameList_init(&new_sorted_names_list);
 
+    // used if -t/--trash is specified
+    FilenameList trash_list;
+    FilenameList_init(&trash_list);
+
     // used to handle temporary files
     RenamePathList rename_path_list;
     RenamePathList_init(&rename_path_list);
@@ -211,10 +264,20 @@ int main(int argc, char *argv[]) {
                            .editor = NULL,
                            .force = false,
                            .silent = false,
+                           .trash = false,
                            .files = &initial_names_list};
 
     // parse arguments
     argp_parse(&argp, argc, argv, 0, 0, &arguments);
+
+    // check that `gio` is available if trashing files
+    if (arguments.trash) {
+        if (!binary_exists("gio")) {
+            fprintf(stderr, "Error: gio (as part of GLib) is required for "
+                            "trash functionality.\n");
+            goto fail;
+        }
+    }
 
     DIR *cur_dir = NULL;
     FILE *tmp_edit_file = NULL;
@@ -288,7 +351,7 @@ int main(int argc, char *argv[]) {
     char *editor = arguments.editor;
     if (!editor) { editor = get_editor_from_env(); }
     if (!editor) {
-        fprintf(stderr, "Error: Could not find any editor from environment.");
+        fprintf(stderr, "Error: Could not find any editor from environment.\n");
         goto fail;
     }
 
@@ -368,17 +431,27 @@ int main(int argc, char *argv[]) {
         // skip if unchanged
         if (strcmp(initial_filename, new_filename) == 0) { continue; }
 
-        // delete
+        // if marked for deletion
         if (new_filename[0] == arguments.delete_char) {
-            int result = remove(initial_filename);
-            if (result != 0) {
-                perror("remove");
-                fprintf(stderr, "Error: Could not delete file '%s'.\n",
-                        initial_filename);
-                goto fail;
+            // trash
+            if (arguments.trash) {
+                FilenameList_add(&trash_list, strdup(initial_filename));
+                continue;
             }
-            if (!arguments.silent) { print_delete_message(initial_filename); }
-            continue;
+            // delete
+            else {
+                int result = remove(initial_filename);
+                if (result != 0) {
+                    perror("remove");
+                    fprintf(stderr, "Error: Could not delete file '%s'.\n",
+                            initial_filename);
+                    goto fail;
+                }
+                if (!arguments.silent) {
+                    print_delete_message(initial_filename);
+                }
+                continue;
+            }
         }
 
         // if instance of cyclic renaming
@@ -396,12 +469,42 @@ int main(int argc, char *argv[]) {
                                .temp_name = strdup(temp_filename),
                                .new_name = new_filename};
             RenamePathList_add(&rename_path_list, rp);
-        } else {
+        }
+        // else standard rename
+        else {
             bool success = rename_file(initial_filename, new_filename);
             if (!success) { goto fail; }
             if (!arguments.silent) {
                 print_rename_message(initial_filename, new_filename);
             }
+        }
+    }
+
+    // trash files in batches
+    if (trash_list.count > 0) {
+        // first argument is program itself, second is trash command
+        char *gio_args[200] = {"gio", "trash"};
+        int args_idx = 2;
+
+        for (int i = 0; i < trash_list.count; i++) {
+            gio_args[args_idx] = trash_list.data[i];
+            args_idx++;
+
+            if (args_idx == (sizeof(gio_args) / sizeof(gio_args[0])) - 1) {
+                gio_args[args_idx] = NULL;
+                bool success = gio_trash(gio_args);
+                if (!success) { goto fail; }
+                args_idx = 2;
+            }
+
+            print_trash_message(trash_list.data[i]);
+        }
+
+        // flush buffer
+        if (args_idx > 3) {
+            gio_args[args_idx] = NULL;
+            bool success = gio_trash(gio_args);
+            if (!success) { goto fail; }
         }
     }
 
@@ -418,6 +521,7 @@ int main(int argc, char *argv[]) {
     // cleanup
     FilenameList_free(&initial_names_list);
     FilenameList_free(&new_names_list);
+    FilenameList_free(&trash_list);
     RenamePathList_free(&rename_path_list);
     free(new_sorted_names_list.data);
 
@@ -429,6 +533,7 @@ int main(int argc, char *argv[]) {
 fail:
     FilenameList_free(&initial_names_list);
     FilenameList_free(&new_names_list);
+    FilenameList_free(&trash_list);
     RenamePathList_free(&rename_path_list);
     if (new_sorted_names_list.data) { free(new_sorted_names_list.data); }
 
