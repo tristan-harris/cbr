@@ -1,10 +1,12 @@
+#include <argp.h>
 #include <dirent.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <unistd.h>
+
+#define CBR_VERSION "0.1"
 
 // used to define type-safe dynamic arrays
 #define DEFINE_ARRAY_TYPE(Name, Type)                                          \
@@ -52,10 +54,66 @@ typedef struct {
     char *new_name;
 } RenamePath;
 
-DEFINE_ARRAY_TYPE(FilenameList, char *);
-DEFINE_ARRAY_TYPE(RenamePathList, RenamePath *);
+DEFINE_ARRAY_TYPE(FilenameList, char *)
+DEFINE_ARRAY_TYPE(RenamePathList, RenamePath *)
+
+typedef struct {
+    bool force;          // whether to overwrite existing files
+    bool silent;         // whether to write to stdout
+    char delete_char;    // character used to mark file for deletion
+    char *editor;        // specify editor to use
+    FilenameList *files; // the files to be renamed (args)
+} Arguments;
+
+// ===== ARGUMENT PARSING ======================================================
+
+const char *argp_program_version = "v" CBR_VERSION;
+
+static char doc[] = "cbr -- Bulk renaming utility";
+
+static char args_doc[] = "[FILE]...";
+
+static struct argp_option options[] = {
+    {"deletechar", 'd', "CHARACTER", 0,
+     "Specify what deletion mark to use. Default '#'", 0},
+    {"editor", 'e', "PROGRAM", 0, "Specify what editor to use", 0},
+    {"force", 'f', 0, 0, "Allow overwriting of existing files", 0},
+    {"silent", 's', 0, 0, "Only report errors", 0},
+    {0}};
+
+static error_t parse_opt(int key, char *arg, struct argp_state *state) {
+    Arguments *arguments = state->input;
+
+    switch (key) {
+    case 'd':
+        arguments->delete_char = arg[0];
+        break;
+    case 'e':
+        arguments->editor = arg;
+        break;
+    case 'f':
+        arguments->force = true;
+        break;
+    case 's':
+        arguments->silent = true;
+        break;
+    case ARGP_KEY_ARG:
+        FilenameList_add(arguments->files, strdup(arg));
+        break;
+    default:
+        return ARGP_ERR_UNKNOWN;
+    }
+    return 0;
+}
+
+static struct argp argp = {options, parse_opt, args_doc, doc, 0, 0, 0};
 
 // ===== UTIL ==================================================================
+
+bool file_exists(const char *filename) {
+    struct stat st;
+    return lstat(filename, &st) == 0; // lstat() does not follow symlink
+}
 
 // whether binary exists in directory in $PATH
 bool binary_exists(const char *name) {
@@ -70,7 +128,7 @@ bool binary_exists(const char *name) {
         char absolute_path[512];
         snprintf(absolute_path, sizeof(absolute_path), "%s/%s", dir, name);
 
-        if (access(absolute_path, X_OK) == 0) {
+        if (file_exists(absolute_path)) {
             free(paths);
             return true;
         }
@@ -80,11 +138,6 @@ bool binary_exists(const char *name) {
 
     free(paths);
     return false;
-}
-
-bool file_exists(const char *filename) {
-    struct stat st;
-    return lstat(filename, &st) == 0; // lstat() does not follow symlink
 }
 
 void generate_unique_filepath(char buffer[], int buf_len, char *prefix) {
@@ -143,7 +196,7 @@ void print_delete_message(const char *filename) {
 
 // ===== MAIN ==================================================================
 
-int main(void) {
+int main(int argc, char *argv[]) {
     FilenameList initial_names_list, new_names_list, new_sorted_names_list;
     FilenameList_init(&initial_names_list);
     FilenameList_init(&new_names_list);
@@ -153,34 +206,47 @@ int main(void) {
     RenamePathList rename_path_list;
     RenamePathList_init(&rename_path_list);
 
+    // default arguments
+    Arguments arguments = {.delete_char = '#',
+                           .editor = NULL,
+                           .force = false,
+                           .silent = false,
+                           .files = &initial_names_list};
+
+    // parse arguments
+    argp_parse(&argp, argc, argv, 0, 0, &arguments);
+
     DIR *cur_dir = NULL;
     FILE *tmp_edit_file = NULL;
 
-    // read dir
-    cur_dir = opendir(TARGET_DIR);
-    if (!cur_dir) {
-        perror("opendir");
-        goto fail;
-    }
-
-    struct dirent *entry;
-
-    // collect names of regular files and symbolic links
-    while ((entry = readdir(cur_dir)) != NULL) {
-        if (entry->d_type == DT_REG || entry->d_type == DT_LNK) {
-            if (entry->d_name[0] == '#') {
-                fprintf(stderr,
-                        "Error: Input filenames ('%s') cannot begin with "
-                        "delete character '#'.\n",
-                        entry->d_name);
-                goto fail;
-            }
-            FilenameList_add(&initial_names_list, strdup(entry->d_name));
+    // if no file arguments specified, populate input list with contents of
+    // current working directory
+    if (initial_names_list.count == 0) {
+        cur_dir = opendir(TARGET_DIR);
+        if (!cur_dir) {
+            perror("opendir");
+            goto fail;
         }
-    }
 
-    closedir(cur_dir);
-    cur_dir = NULL;
+        struct dirent *entry;
+
+        // collect names of regular files and symbolic links
+        while ((entry = readdir(cur_dir)) != NULL) {
+            if (entry->d_type == DT_REG || entry->d_type == DT_LNK) {
+                if (entry->d_name[0] == arguments.delete_char) {
+                    fprintf(stderr,
+                            "Error: Input filenames ('%s') cannot begin with "
+                            "delete character '%c'.\n",
+                            entry->d_name, arguments.delete_char);
+                    goto fail;
+                }
+                FilenameList_add(&initial_names_list, strdup(entry->d_name));
+            }
+        }
+
+        closedir(cur_dir);
+        cur_dir = NULL;
+    }
 
     // check that there is at least one input filename
     if (initial_names_list.count == 0) { exit(EXIT_SUCCESS); }
@@ -210,9 +276,15 @@ int main(void) {
     tmp_edit_file = NULL;
 
     // edit file list
+    char *editor = arguments.editor;
+    if (!editor) { editor = get_editor_from_env(); }
+    if (!editor) {
+        fprintf(stderr, "Error: Could not find any editor from environment.");
+        goto fail;
+    }
+
     char edit_cmd[256];
-    snprintf(edit_cmd, sizeof(edit_cmd), "%s %s", get_editor_from_env(),
-             tmp_file_path);
+    snprintf(edit_cmd, sizeof(edit_cmd), "%s %s", editor, tmp_file_path);
     int return_code = system(edit_cmd);
 
     if (return_code != 0) {
@@ -257,11 +329,11 @@ int main(void) {
         char *new_filename = new_names_list.data[i];
 
         // skip files to be deleted
-        if (new_filename[0] == '#') { continue; }
+        if (new_filename[0] == arguments.delete_char) { continue; }
 
         // if renaming to filename not in input list and file already exists
         if (!filename_list_has(&initial_names_list, new_filename)) {
-            if (file_exists(new_filename)) {
+            if (!arguments.force && file_exists(new_filename)) {
                 fprintf(stderr, "Error: File '%s' already exists.\n",
                         new_filename);
                 goto fail;
@@ -288,7 +360,7 @@ int main(void) {
         if (strcmp(initial_filename, new_filename) == 0) { continue; }
 
         // delete
-        if (new_filename[0] == '#') {
+        if (new_filename[0] == arguments.delete_char) {
             int result = remove(initial_filename);
             if (result != 0) {
                 perror("remove");
@@ -296,7 +368,7 @@ int main(void) {
                         initial_filename);
                 goto fail;
             }
-            print_delete_message(initial_filename);
+            if (!arguments.silent) { print_delete_message(initial_filename); }
             continue;
         }
 
@@ -318,15 +390,20 @@ int main(void) {
         } else {
             bool success = rename_file(initial_filename, new_filename);
             if (!success) { goto fail; }
-            print_rename_message(initial_filename, new_filename);
+            if (!arguments.silent) {
+                print_rename_message(initial_filename, new_filename);
+            }
         }
     }
 
+    // rename temp files to new filenames
     for (int i = 0; i < rename_path_list.count; i++) {
         RenamePath *rp = rename_path_list.data[i];
         bool success = rename_file(rp->temp_name, rp->new_name);
         if (!success) { goto fail; }
-        print_rename_message(rp->initial_name, rp->new_name);
+        if (!arguments.silent) {
+            print_rename_message(rp->initial_name, rp->new_name);
+        }
     }
 
     // cleanup
