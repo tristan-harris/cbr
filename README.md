@@ -46,6 +46,6 @@ functionality requires the gio program from GLib.
 
 ### Motivation
 
-cbr closely follows the design and can be considered a reimplementation of the Rust program [vimv](https://github.com/dmulholl/vimv), developed by Darren Mulholland. vimv is perfectly good, but I never liked having to install the entire Rust toolchain just to use one small program.
+`cbr` closely follows the design and can be considered a reimplementation of the Rust program [vimv](https://github.com/dmulholl/vimv), developed by Darren Mulholland. `vimv` is perfectly good, but I never liked having to install the entire Rust toolchain just to use one small program.
 
-Therefore, cbr exists as a C-based alternative to vimv.
+Therefore, cbr exists as a C-based alternative to `vimv`.
