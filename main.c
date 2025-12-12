@@ -40,6 +40,8 @@
         if (a->data) { free(a->data); }                                        \
     }
 
+#define ARRAY_LEN(arr) (sizeof(arr) / sizeof((arr)[0]))
+
 #define BOLD "\x1b[1m"
 #define RED "\x1b[31m"
 #define GREEN "\x1b[32m"
@@ -490,14 +492,16 @@ int main(int argc, char *argv[]) {
             gio_args[args_idx] = trash_list.data[i];
             args_idx++;
 
-            if (args_idx == (sizeof(gio_args) / sizeof(gio_args[0])) - 1) {
+            if (args_idx == ARRAY_LEN(gio_args) - 1) {
                 gio_args[args_idx] = NULL;
                 bool success = gio_trash(gio_args);
                 if (!success) { goto fail; }
                 args_idx = 2;
-            }
 
-            print_trash_message(trash_list.data[i]);
+                for (int j = 2; gio_args[j]; j++) {
+                    print_trash_message(gio_args[j]);
+                }
+            }
         }
 
         // flush buffer
@@ -505,6 +509,10 @@ int main(int argc, char *argv[]) {
             gio_args[args_idx] = NULL;
             bool success = gio_trash(gio_args);
             if (!success) { goto fail; }
+
+            for (int j = 2; gio_args[j]; j++) {
+                print_trash_message(gio_args[j]);
+            }
         }
     }
 
