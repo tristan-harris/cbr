@@ -78,7 +78,7 @@ static char doc[] = "cbr -- Bulk renaming utility";
 static char args_doc[] = "[FILE]...";
 
 static struct argp_option options[] = {
-    {"deletechar", 'd', "CHARACTER", 0,
+    {"delchar", 'd', "CHARACTER", 0,
      "Specify what deletion mark to use. Default '#'", 0},
     {"editor", 'e', "PROGRAM", 0, "Specify what editor to use", 0},
     {"force", 'f', 0, 0, "Allow overwriting of existing files", 0},
