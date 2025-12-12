@@ -33,7 +33,7 @@
         for (int i = 0; i < a->count; i++) {                                   \
             free(a->data[i]);                                                  \
         }                                                                      \
-        free(a->data);                                                         \
+        if (a->data) { free(a->data); }                                        \
     }
 
 #define BOLD "\x1b[1m"
@@ -42,7 +42,6 @@
 #define RESET "\x1b[0m"
 
 #define TARGET_DIR "."
-#define TEMP_FILE_TEMPLATE "cbr_file_XXXXXX"
 
 // ===== DATA STRUCTURES =======================================================
 
@@ -61,10 +60,10 @@ DEFINE_ARRAY_TYPE(RenamePathList, RenamePath *);
 // whether binary exists in directory in $PATH
 bool binary_exists(const char *name) {
     const char *path = getenv("PATH");
-    if (!path) { return 0; }
+    if (!path) { return false; }
 
     char *paths = strdup(path); // cannot directly edit str from getenv()
-    if (!paths) { return 0; }
+    if (!paths) { return false; }
 
     char *dir = strtok(paths, ":");
     while (dir) {
@@ -88,9 +87,9 @@ bool file_exists(const char *filename) {
     return lstat(filename, &st) == 0; // lstat() does not follow symlink
 }
 
-void generate_unique_filename(char buffer[], int buf_len) {
+void generate_unique_filepath(char buffer[], int buf_len, char *prefix) {
     do {
-        snprintf(buffer, buf_len, "cbr_transition_file_%d", rand() % 1000);
+        snprintf(buffer, buf_len, "%s_%d", prefix, rand() % 1000);
     } while (file_exists(buffer));
 }
 
@@ -122,23 +121,15 @@ bool filename_list_has(FilenameList *fl, char *filename) {
     return match != NULL;
 }
 
-void rename_file(const char *old_filename, const char *new_filename) {
+bool rename_file(const char *old_filename, const char *new_filename) {
     int result = rename(old_filename, new_filename);
     if (result != 0) {
         perror("rename");
-        printf("Attempted to rename '%s' to '%s'\n", old_filename,
-               new_filename);
-        exit(EXIT_FAILURE);
+        fprintf(stderr, "Error: Could not rename '%s' to '%s'\n", old_filename,
+                new_filename);
+        return false;
     }
-}
-
-void remove_file(const char *filename) {
-    int result = remove(filename);
-    if (result != 0) {
-        perror("remove");
-        printf("Attempted to remove '%s'\n", filename);
-        exit(EXIT_FAILURE);
-    }
+    return true;
 }
 
 void print_rename_message(const char *old_filename, const char *new_filename) {
@@ -156,93 +147,100 @@ int main(void) {
     FilenameList initial_names_list, new_names_list, new_sorted_names_list;
     FilenameList_init(&initial_names_list);
     FilenameList_init(&new_names_list);
+    FilenameList_init(&new_sorted_names_list);
 
     // used to handle temporary files
     RenamePathList rename_path_list;
     RenamePathList_init(&rename_path_list);
 
+    DIR *cur_dir = NULL;
+    FILE *tmp_edit_file = NULL;
+
     // read dir
-    DIR *dir = opendir(TARGET_DIR);
-    if (!dir) {
+    cur_dir = opendir(TARGET_DIR);
+    if (!cur_dir) {
         perror("opendir");
-        return EXIT_FAILURE;
+        goto fail;
     }
 
     struct dirent *entry;
 
     // collect names of regular files and symbolic links
-    while ((entry = readdir(dir)) != NULL) {
+    while ((entry = readdir(cur_dir)) != NULL) {
         if (entry->d_type == DT_REG || entry->d_type == DT_LNK) {
             if (entry->d_name[0] == '#') {
-                printf("Error: Input filenames ('%s') cannot begin with '#'.\n",
-                       entry->d_name);
-                return EXIT_FAILURE;
+                fprintf(stderr,
+                        "Error: Input filenames ('%s') cannot begin with "
+                        "delete character '#'.\n",
+                        entry->d_name);
+                goto fail;
             }
             FilenameList_add(&initial_names_list, strdup(entry->d_name));
         }
     }
 
+    closedir(cur_dir);
+    cur_dir = NULL;
+
     // check that there is at least one input filename
-    if (initial_names_list.count == 0) { return EXIT_SUCCESS; }
+    if (initial_names_list.count == 0) { exit(EXIT_SUCCESS); }
 
     // sort file names
     qsort(initial_names_list.data, initial_names_list.count, sizeof(char **),
           str_cmp);
 
     // temp file creation
-    char tmp_file_path[] = TEMP_FILE_TEMPLATE;
-    int tmp_file_fd = mkstemp(tmp_file_path); // TODO: is file already open?
-
-    if (tmp_file_fd == -1) {
-        perror("mkstemp");
-        return EXIT_FAILURE;
-    }
+    char tmp_file_path[32];
+    generate_unique_filepath(tmp_file_path, sizeof(tmp_file_path),
+                             "/tmp/cbr_edit_file");
 
     // open temp file
-    FILE *tmp_file_ptr = fdopen(tmp_file_fd, "w");
-    if (!tmp_file_ptr) {
-        perror("fdopen");
-        return EXIT_FAILURE;
+    tmp_edit_file = fopen(tmp_file_path, "w+");
+    if (!tmp_edit_file) {
+        perror("fopen");
+        goto fail;
     }
 
     // write to temp file
     for (int i = 0; i < initial_names_list.count; i++) {
-        fprintf(tmp_file_ptr, "%s\n", initial_names_list.data[i]);
+        fprintf(tmp_edit_file, "%s\n", initial_names_list.data[i]);
     }
 
-    closedir(dir);
-    fclose(tmp_file_ptr);
+    fclose(tmp_edit_file);
+    tmp_edit_file = NULL;
 
     // edit file list
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "%s %s", get_editor_from_env(), tmp_file_path);
-    int return_code = system(cmd);
+    char edit_cmd[256];
+    snprintf(edit_cmd, sizeof(edit_cmd), "%s %s", get_editor_from_env(),
+             tmp_file_path);
+    int return_code = system(edit_cmd);
 
     if (return_code != 0) {
-        printf("Error: Editor returned failure code %d.\n", return_code);
-        return EXIT_FAILURE;
+        fprintf(stderr, "Error: Editor returned exit code %d.\n", return_code);
+        goto fail;
     }
 
     // open edited temp file
-    tmp_file_ptr = fopen(tmp_file_path, "r");
-    if (!tmp_file_ptr) {
+    tmp_edit_file = fopen(tmp_file_path, "r");
+    if (!tmp_edit_file) {
         perror("fopen");
-        return EXIT_FAILURE;
+        goto fail;
     }
 
     // read temp file
-    char buffer[256];
-    while (fgets(buffer, sizeof(buffer), tmp_file_ptr)) {
-        buffer[strcspn(buffer, "\n")] = '\0'; // strip newline
-        FilenameList_add(&new_names_list, strdup(buffer));
+    char new_fn_buf[256];
+    while (fgets(new_fn_buf, sizeof(new_fn_buf), tmp_edit_file)) {
+        new_fn_buf[strcspn(new_fn_buf, "\n")] = '\0'; // strip newline
+        FilenameList_add(&new_names_list, strdup(new_fn_buf));
     }
 
     // check that there are same number of lines
     if (initial_names_list.count != new_names_list.count) {
-        printf("Error: Mismatched number of lines. New filename list contains "
-               "%d entries while original list contains %d.\n",
-               new_names_list.count, initial_names_list.count);
-        return EXIT_FAILURE;
+        fprintf(stderr,
+                "Error: Mismatched number of lines. New filename list contains "
+                "%d entries while original list contains %d.\n",
+                new_names_list.count, initial_names_list.count);
+        goto fail;
     }
 
     // shallow copy new file list for sorting
@@ -264,8 +262,9 @@ int main(void) {
         // if renaming to filename not in input list and file already exists
         if (!filename_list_has(&initial_names_list, new_filename)) {
             if (file_exists(new_filename)) {
-                printf("Error: File '%s' already exists.\n", new_filename);
-                return EXIT_FAILURE;
+                fprintf(stderr, "Error: File '%s' already exists.\n",
+                        new_filename);
+                goto fail;
             }
         }
 
@@ -274,9 +273,9 @@ int main(void) {
 
         if (strcmp(new_sorted_names_list.data[i],
                    new_sorted_names_list.data[i + 1]) == 0) {
-            printf("Error: Output filenames are not unique ('%s').\n",
-                   new_sorted_names_list.data[i]);
-            return EXIT_FAILURE;
+            fprintf(stderr, "Error: Output filenames are not unique ('%s').\n",
+                    new_sorted_names_list.data[i]);
+            goto fail;
         }
     }
 
@@ -290,7 +289,13 @@ int main(void) {
 
         // delete
         if (new_filename[0] == '#') {
-            remove_file(initial_filename);
+            int result = remove(initial_filename);
+            if (result != 0) {
+                perror("remove");
+                fprintf(stderr, "Error: Could not delete file '%s'.\n",
+                        initial_filename);
+                goto fail;
+            }
             print_delete_message(initial_filename);
             continue;
         }
@@ -298,10 +303,12 @@ int main(void) {
         // if instance of cyclic renaming
         if (filename_list_has(&initial_names_list, new_filename)) {
             char temp_filename[256];
-            generate_unique_filename(temp_filename, sizeof(temp_filename));
+            generate_unique_filepath(temp_filename, sizeof(temp_filename),
+                                     "cbr_transition_file");
 
-            // rename later from temp name to avoid conflict
-            rename_file(initial_filename, temp_filename);
+            // will rename later from temp name to avoid conflict
+            bool success = rename_file(initial_filename, temp_filename);
+            if (!success) { goto fail; }
 
             RenamePath *rp = malloc(sizeof *rp);
             *rp = (RenamePath){.initial_name = initial_filename,
@@ -309,26 +316,39 @@ int main(void) {
                                .new_name = new_filename};
             RenamePathList_add(&rename_path_list, rp);
         } else {
-            rename_file(initial_filename, new_filename);
+            bool success = rename_file(initial_filename, new_filename);
+            if (!success) { goto fail; }
             print_rename_message(initial_filename, new_filename);
         }
     }
 
     for (int i = 0; i < rename_path_list.count; i++) {
         RenamePath *rp = rename_path_list.data[i];
-        rename_file(rp->temp_name, rp->new_name);
+        bool success = rename_file(rp->temp_name, rp->new_name);
+        if (!success) { goto fail; }
         print_rename_message(rp->initial_name, rp->new_name);
     }
 
-    // free memory from dynamic arrays
+    // cleanup
     FilenameList_free(&initial_names_list);
     FilenameList_free(&new_names_list);
     RenamePathList_free(&rename_path_list);
-
     free(new_sorted_names_list.data);
 
-    fclose(tmp_file_ptr);
+    fclose(tmp_edit_file);
     remove(tmp_file_path);
 
     return EXIT_SUCCESS;
+
+fail:
+    FilenameList_free(&initial_names_list);
+    FilenameList_free(&new_names_list);
+    RenamePathList_free(&rename_path_list);
+    if (new_sorted_names_list.data) { free(new_sorted_names_list.data); }
+
+    if (cur_dir) { closedir(cur_dir); }
+    if (tmp_edit_file) { fclose(tmp_edit_file); }
+    if (file_exists(tmp_file_path)) { remove(tmp_file_path); }
+
+    return EXIT_FAILURE;
 }
