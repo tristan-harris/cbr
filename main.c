@@ -8,7 +8,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define CBR_VERSION "0.1"
+#define CBR_VERSION "1.0"
 
 // used to define type-safe dynamic arrays
 #define DEFINE_ARRAY_TYPE(Name, Type)                                          \
