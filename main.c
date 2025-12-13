@@ -295,6 +295,9 @@ int main(int argc, char *argv[]) {
     // parse arguments
     argp_parse(&argp, argc, argv, 0, 0, &arguments);
 
+    DIR *cur_dir = NULL;
+    FILE *tmp_edit_file = NULL;
+
     // check that `gio` is available if trashing files
     if (arguments.trash) {
         if (!binary_exists("gio")) {
@@ -303,9 +306,6 @@ int main(int argc, char *argv[]) {
             goto fail;
         }
     }
-
-    DIR *cur_dir = NULL;
-    FILE *tmp_edit_file = NULL;
 
     // if no file arguments specified, populate input list with contents of
     // current working directory
