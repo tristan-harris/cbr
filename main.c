@@ -536,7 +536,7 @@ int main(int argc, char *argv[]) {
         }
 
         // flush buffer
-        if (args_idx > 3) {
+        if (args_idx > 2) {
             gio_args[args_idx] = NULL;
             bool success = gio_trash(gio_args);
             if (!success) { goto fail; }
