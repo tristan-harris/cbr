@@ -2,13 +2,15 @@
 
 <img src="images/usage_screenshot.png" width="600"/>
 
-### Overview
+## Overview
 
-`cbr` is a lightweight bulk file renaming utility. It is only available for Linux systems.
+`cbr` (C Bulk Rename) is a lightweight bulk file renaming utility. It is only available for Linux systems.
+
+See the help page below on how to use the program.
 
 ---
 
-### Usage
+## Usage
 ```
 cbr - C Bulk Renaming (Utility)
 
@@ -44,8 +46,16 @@ functionality requires the gio program from GLib.
 ```
 ---
 
-### Motivation
+## Additional
 
-`cbr` closely follows the design and can be considered a reimplementation of the Rust program [vimv](https://github.com/dmulholl/vimv), developed by Darren Mulholland. `vimv` is perfectly good, but I never liked having to install the entire Rust toolchain just to use one small program.
+Along with terminal-based editors, it is possible to use `cbr` with graphical editors. To do so, you need to launch them with a 'wait' flag or the like, depending on the particular editor. An example of using `cbr` with VSCode is shown below.
+```bash
+cbr --editor 'code --wait'
+```
+---
 
-Therefore, cbr exists as a C-based alternative to `vimv`.
+## Motivation
+
+`cbr` follows the design and can be considered a reimplementation of the Rust program [vimv](https://github.com/dmulholl/vimv), developed by Darren Mulholland. `vimv` itself is perfectly good, but I never liked having to install the entire Rust toolchain just to use one small program.
+
+Therefore, `cbr` exists as an alternative.
