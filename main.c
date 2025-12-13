@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include <argp.h>
 #include <dirent.h>
 #include <stdbool.h>
