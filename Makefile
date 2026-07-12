@@ -1,5 +1,5 @@
-SOURCE := main.c
-TARGET := cbr
+SOURCE ?= main.c
+TARGET ?= cbr
 
 .PHONY: all install
 
