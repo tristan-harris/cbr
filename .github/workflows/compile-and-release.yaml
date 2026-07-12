@@ -1,4 +1,4 @@
-name: Compile and release
+name: Compile and Release
 
 on:
   push:
@@ -8,16 +8,17 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Build x86_64
-        run: |
-          make TARGET=cbr-linux-x86_64
+      - name: Build
+        run: make TARGET=cbr-linux-x86_64
 
-      - name: Upload release
+      - name: Release
         uses: softprops/action-gh-release@v2
+        token: ${{ secrets.CBR_RELEASE_TOKEN }}
         with:
-          files: |
-            cbr-linux-x86_64
+          files: cbr-linux-x86_64
