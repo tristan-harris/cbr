@@ -9,4 +9,4 @@ $(TARGET): $(SOURCE)
 	$(CC) $(SOURCE) -o $@ -static -std=c99 -Wall -Wextra -Wpedantic
 
 install: $(TARGET)
-	cp $(TARGET) /usr/local/bin
+	cp $(TARGET) $(HOME)/.local/bin
