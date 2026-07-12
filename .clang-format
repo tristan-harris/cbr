@@ -1,0 +1,4 @@
+AllowShortBlocksOnASingleLine: Always
+AllowShortIfStatementsOnASingleLine: OnlyFirstIf
+BasedOnStyle: LLVM
+IndentWidth: 4
